@@ -1286,8 +1286,8 @@ extern "C" {
                             size_t num_trigger_tokens);
 
 
-    /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
     LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
+                             int32_t   n_vocab,          // vocabulary size (for dense token count array)
                              int32_t   penalty_last_n,   // last n tokens to penalize (0 = disable penalty, -1 = context size)
                                float   penalty_repeat,   // 1.0 = disabled
                                float   penalty_freq,     // 0.0 = disabled

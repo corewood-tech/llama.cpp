@@ -1418,16 +1418,19 @@ void llama_context::output_reorder() {
         const uint64_t i0 = output_swaps[s].i0;
         const uint64_t i1 = output_swaps[s].i1;
 
+        // Use std::swap_ranges for block operations (more vectorization-friendly)
         if (logits_size > 0) {
-            for (uint64_t k = 0; k < n_vocab; k++) {
-                std::swap(logits[i0*n_vocab + k], logits[i1*n_vocab + k]);
-            }
+            std::swap_ranges(
+                logits + i0*n_vocab,
+                logits + i0*n_vocab + n_vocab,
+                logits + i1*n_vocab);
         }
 
         if (embd_size > 0) {
-            for (uint64_t k = 0; k < n_embd; k++) {
-                std::swap(embd[i0*n_embd + k], embd[i1*n_embd + k]);
-            }
+            std::swap_ranges(
+                embd + i0*n_embd,
+                embd + i0*n_embd + n_embd,
+                embd + i1*n_embd);
         }
     }
 
