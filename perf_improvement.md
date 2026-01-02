@@ -228,6 +228,28 @@ Update this table as you complete each improvement:
 | 8.1 | output swap block | - | - | ~1.2x | **IMPLEMENTED** | std::swap_ranges |
 | 9.1 | ring buffer (mod->bitwise) | 3.1 | 0.78 | **4.0x** | **IMPLEMENTED** | llama-sampling.cpp:21-149 |
 
+### GPU→CPU Offloading Optimizations
+
+| ID | Component | Baseline (us) | Optimized (us) | Speedup | Status | Notes |
+|----|-----------|---------------|----------------|---------|--------|-------|
+| G.1 | GPU-side greedy argmax | 314.89 | 1.04 | **303.76x** | **VALIDATED** | Qwen3-8B 151k vocab, Metal/M4 |
+| G.2 | GPU-side top-k | - | - | pending | NOT_STARTED | New topk.cu kernel needed |
+| G.3 | Async transfer pipeline | - | - | pending | NOT_STARTED | Overlap transfer with next inference |
+
+**G.1 Benchmark Results (tests/bench-argmax.cpp):**
+- Model: Qwen3-8B-Q4_K_M, Vocab: 151,936, Logits size: 593.50 KB
+- `llama_get_logits_ith + CPU argmax`: 314.89 μs (baseline)
+- `llama_get_argmax_ith (GPU)`: 1.04 μs (**303.76x faster**)
+- `llama_sampler_sample (greedy)`: 1.76 μs (178.58x faster via fast path)
+- Per-token savings: ~314 μs (for 100 tokens: **31.4ms saved**)
+
+**G.1 Implementation Details:**
+- Added `t_argmax` tensor to `llm_graph_result` (computed via `ggml_argmax`)
+- Added `build_argmax()` to `llm_graph_context` - called after model graph build
+- Added `llama_get_argmax_ith()` API to retrieve GPU-computed argmax (4 bytes vs 593KB)
+- Modified `llama_sampler_sample()` to detect greedy-only chains and use argmax fast path
+- Files modified: `llama-graph.h`, `llama-graph.cpp`, `llama-model.cpp`, `llama-context.h`, `llama-context.cpp`, `llama-sampling.cpp`, `llama.h`
+
 ### Status Values
 - `NOT_STARTED` - No work done
 - `BENCHMARKED` - Baseline recorded

@@ -539,6 +539,7 @@ int64_t llm_graph_result::get_max_nodes() const {
 void llm_graph_result::reset() {
     t_tokens      = nullptr;
     t_logits      = nullptr;
+    t_argmax      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
 
@@ -2001,6 +2002,20 @@ void llm_graph_context::build_dense_out(
     ggml_build_forward_expand(gf, cur);
 }
 
+void llm_graph_context::build_argmax() const {
+    // Only build argmax if we have logits (not embedding-only models)
+    if (res->t_logits == nullptr) {
+        return;
+    }
+
+    // Create argmax operation on the logits tensor
+    // ggml_argmax returns an I32 tensor with shape [n_outputs] containing token indices
+    ggml_tensor * argmax = ggml_argmax(ctx0, res->t_logits);
+    cb(argmax, "result_argmax", -1);
+
+    res->t_argmax = argmax;
+    ggml_build_forward_expand(gf, argmax);
+}
 
 void llm_graph_context::build_pooling(
         ggml_tensor * cls,

@@ -469,7 +469,39 @@ void llama_sampler_free(struct llama_sampler * smpl) {
     delete smpl;
 }
 
+// Helper to check if a sampler is greedy-only (can use GPU argmax)
+static bool llama_sampler_is_greedy_only(const struct llama_sampler * smpl) {
+    const char * name = llama_sampler_name(smpl);
+
+    // Direct greedy sampler
+    if (strcmp(name, "greedy") == 0) {
+        return true;
+    }
+
+    // Check if it's a chain with only greedy
+    if (strcmp(name, "chain") == 0) {
+        const int n = llama_sampler_chain_n(smpl);
+        if (n == 1) {
+            const struct llama_sampler * inner = llama_sampler_chain_get(smpl, 0);
+            return inner && strcmp(llama_sampler_name(inner), "greedy") == 0;
+        }
+    }
+
+    return false;
+}
+
 llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
+    // Fast path: for greedy-only sampling, use GPU-computed argmax
+    // This avoids transferring the full logits tensor from GPU to CPU
+    if (llama_sampler_is_greedy_only(smpl)) {
+        llama_token token = llama_get_argmax_ith(ctx, idx);
+        if (token >= 0) {
+            llama_sampler_accept(smpl, token);
+            return token;
+        }
+        // Fall through to regular path if argmax not available
+    }
+
     const auto * logits = llama_get_logits_ith(ctx, idx);
 
     const llama_model * model = llama_get_model(ctx);

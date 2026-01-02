@@ -66,6 +66,9 @@ struct llama_context {
     float * get_logits();
     float * get_logits_ith(int32_t i);
 
+    int32_t * get_argmax();
+    llama_token get_argmax_ith(int32_t i);
+
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
@@ -246,6 +249,11 @@ private:
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     size_t  logits_size = 0; // capacity (of floats) for logits
     float * logits      = nullptr;
+
+    // argmax output (1-dimensional array: [n_outputs])
+    // GPU-computed argmax for efficient greedy sampling
+    size_t    argmax_size = 0; // capacity (of int32_t) for argmax
+    int32_t * argmax      = nullptr;
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE

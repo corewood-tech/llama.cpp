@@ -7782,6 +7782,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // TODO: move reranking logic here and generalize
     llm->build_dense_out(dense_2_out_layers, dense_3_out_layers);
 
+    // add argmax for efficient greedy sampling on GPU (avoids full logits transfer)
+    llm->build_argmax();
+
     return llm->res->get_gf();
 }
 

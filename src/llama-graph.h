@@ -488,6 +488,7 @@ public:
 
     ggml_tensor * get_tokens()      const { return t_tokens; }
     ggml_tensor * get_logits()      const { return t_logits; }
+    ggml_tensor * get_argmax()      const { return t_argmax; }
     ggml_tensor * get_embd()        const { return t_embd; }
     ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
 
@@ -514,6 +515,7 @@ public:
     // important graph nodes
     ggml_tensor * t_tokens      = nullptr;
     ggml_tensor * t_logits      = nullptr;
+    ggml_tensor * t_argmax      = nullptr;  // argmax of logits for greedy sampling (GPU-computed)
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
 
@@ -839,6 +841,12 @@ struct llm_graph_context {
     void build_dense_out(
             ggml_tensor * dense_2,
             ggml_tensor * dense_3) const;
+
+    //
+    // argmax (for greedy sampling on GPU)
+    //
+
+    void build_argmax() const;
 };
 
 // TODO: better name

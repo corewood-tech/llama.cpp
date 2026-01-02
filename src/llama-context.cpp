@@ -656,6 +656,52 @@ float * llama_context::get_logits_ith(int32_t i) {
     }
 }
 
+int32_t * llama_context::get_argmax() {
+    output_reorder();
+
+    return argmax;
+}
+
+llama_token llama_context::get_argmax_ith(int32_t i) {
+    int64_t j = -1;
+
+    output_reorder();
+
+    try {
+        if (argmax == nullptr) {
+            throw std::runtime_error("no argmax");
+        }
+
+        if (i < 0) {
+            j = n_outputs + i;
+            if (j < 0) {
+                throw std::runtime_error(format("negative index out of range [0, %d)", n_outputs));
+            }
+        } else if ((size_t) i >= output_ids.size()) {
+            throw std::runtime_error(format("out of range [0, %zu)", output_ids.size()));
+        } else {
+            j = output_ids[i];
+        }
+
+        if (j < 0) {
+            throw std::runtime_error(format("batch.logits[%d] != true", i));
+        }
+        if (j >= n_outputs) {
+            // This should not happen
+            throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
+        }
+
+        return (llama_token) argmax[j];
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: invalid argmax id %d, reason: %s\n", __func__, i, err.what());
+#ifndef NDEBUG
+        GGML_ABORT("fatal error");
+#else
+        return -1;
+#endif
+    }
+}
+
 float * llama_context::get_embeddings() {
     output_reorder();
 
@@ -951,6 +997,17 @@ int llama_context::encode(const llama_batch & batch_inp) {
         ggml_backend_tensor_get_async(backend_res, t_logits, logits, 0, n_tokens*n_vocab*sizeof(float));
     }
 
+    // extract argmax (for efficient greedy sampling)
+    auto * t_argmax = res->get_argmax();
+    if (argmax && t_argmax) {
+        ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(sched.get(), t_argmax);
+        GGML_ASSERT(backend_argmax != nullptr);
+        GGML_ASSERT(argmax != nullptr);
+
+        // argmax is just n_tokens * sizeof(int32_t) - much smaller than full logits
+        ggml_backend_tensor_get_async(backend_argmax, t_argmax, argmax, 0, n_tokens*sizeof(int32_t));
+    }
+
     // extract embeddings
     if (embd && t_embd) {
         ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
@@ -1200,6 +1257,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //}
 
         auto * t_logits = res->get_logits();
+        auto * t_argmax = res->get_argmax();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
 
         if (t_embd && res->get_embd_pooled()) {
@@ -1218,6 +1276,20 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
                 ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+            }
+        }
+
+        // extract argmax (for efficient greedy sampling)
+        if (t_argmax && argmax && n_outputs > 0) {
+            ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(sched.get(), t_argmax);
+            GGML_ASSERT(backend_argmax != nullptr);
+
+            int32_t * argmax_out = argmax + n_outputs_prev;
+
+            if (n_outputs) {
+                GGML_ASSERT(n_outputs_prev + n_outputs <= n_outputs_all);
+                GGML_ASSERT((n_outputs_prev + n_outputs) <= (int64_t) argmax_size);
+                ggml_backend_tensor_get_async(backend_argmax, t_argmax, argmax_out, 0, n_outputs*sizeof(int32_t));
             }
         }
 
@@ -1360,6 +1432,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     logits_size = has_logits ? n_vocab*n_outputs_max : 0;
     embd_size   = has_embd   ?  n_embd*n_outputs_max : 0;
+    argmax_size = has_logits ? n_outputs_max : 0;  // argmax is computed alongside logits
 
     if (output_ids.empty()) {
         // init, never resized afterwards
@@ -1367,7 +1440,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     }
 
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
-    const size_t new_size  = (logits_size + embd_size) * sizeof(float);
+    // Include space for argmax (int32_t per output)
+    const size_t new_size  = (logits_size + embd_size) * sizeof(float) + argmax_size * sizeof(int32_t);
 
     // alloc only when more than the current capacity is required
     // TODO: also consider shrinking the buffer
@@ -1381,6 +1455,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
             buf_output = nullptr;
             logits = nullptr;
             embd = nullptr;
+            argmax = nullptr;
         }
 
         auto * buft = ggml_backend_cpu_buffer_type();
@@ -1401,6 +1476,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     logits = has_logits ? output_base               : nullptr;
     embd   = has_embd   ? output_base + logits_size : nullptr;
+    // argmax is stored after logits and embeddings (as int32_t)
+    argmax = has_logits ? (int32_t *)(output_base + logits_size + embd_size) : nullptr;
 
     // set all ids as invalid (negative)
     std::fill(output_ids.begin(), output_ids.end(), -1);
@@ -2555,6 +2632,12 @@ float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     return ctx->get_logits_ith(i);
+}
+
+llama_token llama_get_argmax_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_argmax_ith(i);
 }
 
 float * llama_get_embeddings(llama_context * ctx) {
